@@ -27,10 +27,25 @@ class GameMaster(BaseAgent):
         if self.adventure_context:
             content += f"\n\nAdventure Context:\n{self.adventure_context}"
             
-        if self.adventure_pdf_base64:
-            content += f"\n\nAttached Adventure PDF (Base64):\n{self.adventure_pdf_base64}"
-            
         return SystemMessage(content=content)
+
+    def _preprocess_history(self, messages: List[BaseMessage]) -> List[BaseMessage]:
+        """Inject the rulebook/adventure PDF context at the start of the GM's history."""
+        processed_messages = list(messages)
+        if self.adventure_pdf_base64:
+            pdf_context = HumanMessage(
+                content=[
+                    {"type": "text", "text": "Reference rulebook/adventure PDF for mechanics and setting:"},
+                    {
+                        "type": "media",
+                        "mime_type": "application/pdf",
+                        "data": self.adventure_pdf_base64
+                    }
+                ]
+            )
+            # Prepend the PDF context to the history
+            processed_messages.insert(0, pdf_context)
+        return processed_messages
 
     def _get_poke_message(self) -> HumanMessage:
         return HumanMessage(content="[GM: Resolve the player's action, describe the scene, and nominate the next player.]")
