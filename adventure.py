@@ -53,9 +53,15 @@ class DNDAdventure:
                             max_hp=pc_data.get("hp", 10),
                             ac=pc_data.get("ac", 9),
                             attack_mod=pc_data.get("attack_mod", 0),
+                            damage_mod=pc_data.get("damage_mod", 0),
                             save_target=pc_data.get("save", 15)
                         )
                         self.state_manager.characters[name].inventory = pc_data.get("inventory", [])
+                        
+                        # Load Powers/Spells
+                        powers = pc_data.get("powers", [])
+                        self.state_manager.characters[name].powers = list(powers)
+                        self.state_manager.characters[name].daily_powers = list(powers)
 
                         player = Player(
                             agent_id=name,
@@ -63,8 +69,8 @@ class DNDAdventure:
                             llm=self.llm,
                             state_manager=self.state_manager,
                             adventure_context=self.adventure_context,
-                            character_description=pc_data.get("character_description"),
-                            player_description=pc_data.get("player_description")
+                            physical_description=pc_data.get("physical_description") or pc_data.get("character_description"),
+                            personality_description=pc_data.get("personality_description") or pc_data.get("player_description")
                         )
                         self.players.append(player)
 
@@ -117,8 +123,10 @@ class DNDAdventure:
         return workflow.compile(checkpointer=self.memory, interrupt_before=["gm"])
 
     def start(self, initial_state: GameState, thread_id: str = "game_1"):
+        """Starts the adventure loop."""
         config = {"configurable": {"thread_id": thread_id}}
         skip_count = 0
+        gm_turn_count = 0
         print("--- ADVENTURE START ---")
         self.app.invoke(initial_state, config)
 
@@ -126,6 +134,8 @@ class DNDAdventure:
             while True:
                 state = self.app.get_state(config)
                 if "gm" in state.next:
+                    gm_turn_count += 1
+                    
                     if skip_count > 0:
                         skip_count -= 1
                         user_input = ""
@@ -137,6 +147,17 @@ class DNDAdventure:
                             skip_count = int(user_input) - 1
                             user_input = ""
                     
+                    # Periodic Party Status in Short Log
+                    if gm_turn_count % 4 == 0:
+                        status_report = "[PARTY_STATUS] " + self.state_manager.get_party_status()
+                        self._log(status_report, is_short=True)
+                        for name, char in self.state_manager.characters.items():
+                            inv_report = f"[INVENTORY] {name}: {', '.join(char.inventory) if char.inventory else 'Empty'}"
+                            self._log(inv_report, is_short=True)
+                            if char.powers:
+                                pwr_report = f"[POWERS] {name}: {', '.join(char.powers)}"
+                                self._log(pwr_report, is_short=True)
+
                     if user_input:
                         self.app.update_state(config, {"messages": [HumanMessage(content=f"[System: {user_input}]")]})
                     

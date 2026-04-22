@@ -34,7 +34,13 @@ class GameMaster(BaseAgent):
         
         Available tools: {[t.name for t in self.tools]}
         
-        Important: When using 'roll_dice', you MUST provide a 'reason' for the roll.
+        Important Guidelines:
+        1. When the party moves to a new area or room, you MUST use the 'update_location' tool.
+        2. EXITS: Every time the group reaches a new location (room, chamber, corridor), you MUST describe every door, hallway, or opening leading out of it. Be precise. If there are multiple exits in the same direction (e.g., two doors on the North wall), describe both individually. Never omit an exit.
+        3. When a creature is defeated, use the 'record_defeat' tool.
+        3. When the party finds and takes loot, use the 'record_loot' tool.
+        4. Use 'add_effect' for temporary conditions (e.g., 'Blessed', 'Poisoned', 'Torch Light').
+        5. When using 'roll_dice', you MUST provide a 'reason' for the roll.
         
         Red Box Combat: To attack, use attack_roll with target's AC and attacker's mod. 
         Lower AC is harder to hit (-10 to 10).
@@ -63,8 +69,16 @@ class GameMaster(BaseAgent):
         return HumanMessage(content="[GM: Resolve actions, describe the scene, nominate next player.]")
 
     def run(self, state: GameState) -> Dict[str, Any]:
-        self.state_manager.advance_time(1)
+        # Automatically advance time by 1 minute per turn
+        expiration_events = self.state_manager.advance_time(1)
+        
         history = self._preprocess_history(state["messages"])
+        
+        # If any effects expired, inform the LLM by prepending a system note to the history
+        if expiration_events:
+            event_note = "[System Note: " + " ".join(expiration_events) + "]"
+            history.append(HumanMessage(content=event_note))
+
         prompt = [self._get_system_message(), *history, self._get_poke_message()]
         
         all_new_messages = []
@@ -77,11 +91,14 @@ class GameMaster(BaseAgent):
                 
             prompt.append(response)
             for tool_call in response.tool_calls:
-                # Execute the matched tool
                 tool_to_use = next((t for t in self.tools if t.name == tool_call["name"]), None)
                 if tool_to_use:
                     result = tool_to_use.invoke(tool_call["args"])
                     tool_msg = ToolMessage(content=str(result), tool_call_id=tool_call["id"])
+                    prompt.append(tool_msg)
+                    all_new_messages.append(tool_msg)
+                else:
+                    tool_msg = ToolMessage(content=f"Error: Tool {tool_call['name']} not found.", tool_call_id=tool_call["id"])
                     prompt.append(tool_msg)
                     all_new_messages.append(tool_msg)
 

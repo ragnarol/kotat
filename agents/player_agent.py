@@ -9,15 +9,15 @@ class Player(BaseAgent):
     def __init__(self, agent_id: str, character_name: str, llm: ChatGoogleGenerativeAI, 
                  state_manager: Any,
                  next_player: str = "gm", 
-                 character_description: Optional[str] = None, 
-                 player_description: Optional[str] = None, 
+                 physical_description: Optional[str] = None, 
+                 personality_description: Optional[str] = None, 
                  adventure_context: Optional[str] = None):
         super().__init__(agent_id, llm)
         self.character_name = character_name
         self.state_manager = state_manager
         self.next_player = next_player
-        self.character_description = character_description or ""
-        self.player_description = player_description or ""
+        self.physical_description = physical_description or ""
+        self.personality_description = personality_description or ""
         self.adventure_context = adventure_context or ""
 
     def _preprocess_history(self, messages: List[BaseMessage]) -> List[BaseMessage]:
@@ -40,14 +40,19 @@ class Player(BaseAgent):
         Your Status: {status_line}
         Your Inventory: {inventory}
         
-        Full Party Status: {self.state_manager.get_party_status()}"""
+        Full Party Status: {self.state_manager.get_party_status()}
+        
+        IMPORTANT ROLEPLAY GUIDELINES:
+        1. Describe your actions vividly, but DO NOT roll dice or calculate mechanics (like attack or damage rolls) yourself. The GM will handle all rolls and results.
+        2. Be specific about which items from your inventory you are using for your actions.
+        3. Respond in character, staying true to your description and behavior guidelines."""
         
         if self.adventure_context:
             content += f"\n\nAdventure Context:\n{self.adventure_context}"
-        if self.player_description:
-            content += f"\n\nPlayer Behavior:\n{self.player_description}"
-        if self.character_description:
-            content += f"\n\nCharacter Description:\n{self.character_description}"
+        if self.personality_description:
+            content += f"\n\nPersonality Description:\n{self.personality_description}"
+        if self.physical_description:
+            content += f"\n\nPhysical Description:\n{self.physical_description}"
             
         return SystemMessage(content=content)
 

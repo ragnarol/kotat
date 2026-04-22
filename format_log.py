@@ -21,9 +21,6 @@ def format_log():
     current_node = None
     
     # Regex to capture node name and content from short log
-    # Format: [NODE_NAME] Content...
-    # Format: [NODE_NAME] (TOOL) tool_name(args)
-    # Format: [SYSTEM] Result...
     line_pattern = re.compile(r'^\[(\w+)\]\s*(.*)', re.DOTALL)
 
     for line in lines:
@@ -38,6 +35,27 @@ def format_log():
         content = content.strip()
         
         if not content:
+            continue
+
+        # Handle special markers
+        if node_name == "PARTY_STATUS":
+            md_content += f"### 🛡 Party Status\n\n"
+            chars = content.split(" | ")
+            for char in chars:
+                md_content += f"- **{char}**\n"
+            md_content += "\n"
+            continue
+        
+        if node_name == "INVENTORY":
+            if "### 🎒 Equipment & Resources" not in md_content.split('\n')[-20:]:
+                md_content += f"### 🎒 Equipment & Resources\n"
+            md_content += f"- **Inventory** {content}\n"
+            continue
+
+        if node_name == "POWERS":
+            if "### 🎒 Equipment & Resources" not in md_content.split('\n')[-20:]:
+                md_content += f"### 🎒 Equipment & Resources\n"
+            md_content += f"- **Powers** {content}\n"
             continue
 
         # Start a new section if the node changes (and it's not a SYSTEM message)
@@ -57,6 +75,9 @@ def format_log():
         else:
             # Regular message
             md_content += f"{content}\n\n"
+
+    # Clean up
+    md_content = md_content.replace("### 🎒 Equipment & Resources\n###", "###")
 
     with open(output_md, "w") as f:
         f.write(md_content)

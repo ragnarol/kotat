@@ -18,7 +18,7 @@ def main():
     adventure = DNDAdventure(data_path=data_path)
     
     # Construct party description for the initial prompt
-    party_desc = "\n".join([f"- {p.character_name}: {p.character_description}" for p in adventure.players])
+    party_desc = "\n".join([f"- {p.character_name}: {p.physical_description}" for p in adventure.players])
     
     initial_input = {
         "messages": [
