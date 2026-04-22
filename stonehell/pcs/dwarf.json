@@ -1,6 +1,11 @@
 {
   "character_name": "Brimli",
   "player_name": "Player 3",
-  "character_description": "A stout dwarf. He carries a heavy mace and wears chainmail armor.",
-  "player_description": "Grim, pious, but fiercely loyal. Often quotes dwarven proverbs about stone and strength."
+  "character_description": "A stout dwarf cleric of the mountain gods. He carries a heavy mace and wears chainmail armor.",
+  "player_description": "Grim, pious, but fiercely loyal. Often quotes dwarven proverbs about stone and strength.",
+  "hp": 9,
+  "ac": 3,
+  "attack_mod": 0,
+  "save": 12,
+  "inventory": ["Mace", "Holy Symbol", "Chainmail", "Iron Rations", "Waterskin"]
 }

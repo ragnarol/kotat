@@ -1,28 +1,46 @@
 from typing import Optional, List, Dict, Any
 import re
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage, ToolMessage
 from agents.base_agent import BaseAgent
 from models.game_state import GameState
+from redbox_tools import roll_dice, create_redbox_tools
 
 class GameMaster(BaseAgent):
     """The Game Master agent responsible for world narration and action resolution."""
     
-    def __init__(self, llm: ChatGoogleGenerativeAI, adventure_context: Optional[str] = None, 
-                 player_ids: List[str] = None, adventure_pdf_base64: Optional[str] = None):
+    def __init__(self, llm: ChatGoogleGenerativeAI, 
+                 state_manager: Any,
+                 adventure_context: Optional[str] = None, 
+                 player_ids: List[str] = None, 
+                 adventure_pdf_base64: Optional[str] = None):
         super().__init__("GameMaster", llm)
         self.adventure_context = adventure_context or ""
         self.player_ids = player_ids or []
         self.adventure_pdf_base64 = adventure_pdf_base64
-        self._next_player_override = None
+        self.state_manager = state_manager
+        
+        # Create and bind tools
+        self.tools = [roll_dice] + create_redbox_tools(self.state_manager)
+        self.llm_with_tools = self.llm.bind_tools(self.tools)
 
     def _get_system_message(self) -> SystemMessage:
-        content = """You are the Game Master for a Red Box D&D game. 
+        content = f"""You are the Game Master for a Red Box D&D game. 
         Your job is to describe the results of player actions and narrate the world. 
         Check for traps, rolls, or monster reactions as needed.
         
-        At the end of your description, you MUST specify which character should act next by adding '[NEXT: CharacterName]' on a new line.
-        Available characters: """ + ", ".join(self.player_ids)
+        Current game time: {self.state_manager.get_time_string()}
+        Party Status: {self.state_manager.get_party_status()}
+        
+        Available tools: {[t.name for t in self.tools]}
+        
+        Important: When using 'roll_dice', you MUST provide a 'reason' for the roll.
+        
+        Red Box Combat: To attack, use attack_roll with target's AC and attacker's mod. 
+        Lower AC is harder to hit (-10 to 10).
+        
+        At the end of your description, you MUST nominate the next player: [NEXT: CharacterName]
+        Available characters: {", ".join(self.player_ids)}"""
         
         if self.adventure_context:
             content += f"\n\nAdventure Context:\n{self.adventure_context}"
@@ -30,56 +48,55 @@ class GameMaster(BaseAgent):
         return SystemMessage(content=content)
 
     def _preprocess_history(self, messages: List[BaseMessage]) -> List[BaseMessage]:
-        """Inject the rulebook/adventure PDF context at the start of the GM's history."""
         processed_messages = list(messages)
         if self.adventure_pdf_base64:
             pdf_context = HumanMessage(
                 content=[
                     {"type": "text", "text": "Reference rulebook/adventure PDF for mechanics and setting:"},
-                    {
-                        "type": "media",
-                        "mime_type": "application/pdf",
-                        "data": self.adventure_pdf_base64
-                    }
+                    {"type": "media", "mime_type": "application/pdf", "data": self.adventure_pdf_base64}
                 ]
             )
-            # Prepend the PDF context to the history
             processed_messages.insert(0, pdf_context)
         return processed_messages
 
     def _get_poke_message(self) -> HumanMessage:
-        return HumanMessage(content="[GM: Resolve the player's action, describe the scene, and nominate the next player.]")
+        return HumanMessage(content="[GM: Resolve actions, describe the scene, nominate next player.]")
 
     def run(self, state: GameState) -> Dict[str, Any]:
-        """Executes the GM's turn and extracts the next player."""
-        result = super().run(state)
-        response_content = result["messages"][0].content
+        self.state_manager.advance_time(1)
+        history = self._preprocess_history(state["messages"])
+        prompt = [self._get_system_message(), *history, self._get_poke_message()]
         
-        # Handle list-type content (multimodal or block-based responses)
-        if isinstance(response_content, list):
-            response_text = "".join([
-                block.get("text", "") if isinstance(block, dict) else str(block)
-                for block in response_content
-            ])
-        else:
-            response_text = str(response_content)
+        all_new_messages = []
+        while True:
+            response = self.llm_with_tools.invoke(prompt)
+            response.name = self.name
+            all_new_messages.append(response)
+            if not response.tool_calls:
+                break
+                
+            prompt.append(response)
+            for tool_call in response.tool_calls:
+                # Execute the matched tool
+                tool_to_use = next((t for t in self.tools if t.name == tool_call["name"]), None)
+                if tool_to_use:
+                    result = tool_to_use.invoke(tool_call["args"])
+                    tool_msg = ToolMessage(content=str(result), tool_call_id=tool_call["id"])
+                    prompt.append(tool_msg)
+                    all_new_messages.append(tool_msg)
+
+        last_content = all_new_messages[-1].content
+        text = "".join([b["text"] if isinstance(b, dict) else str(b) for b in (last_content if isinstance(last_content, list) else [last_content])])
         
-        # Extract [NEXT: CharacterName]
-        match = re.search(r"\[NEXT:\s*([^\]]+)\]", response_text)
+        next_player = "gm"
+        match = re.search(r"\[NEXT:\s*([^\]]+)\]", text)
         if match:
-            next_player = match.group(1).strip()
-            # Validate next_player is in player_ids
-            if next_player in self.player_ids:
-                result["next_player"] = next_player
-            else:
-                # Fallback to first player if invalid
-                result["next_player"] = self.player_ids[0] if self.player_ids else "gm"
+            candidate = match.group(1).strip()
+            next_player = candidate if candidate in self.player_ids else (self.player_ids[0] if self.player_ids else "gm")
         else:
-            # Fallback
-            result["next_player"] = self.player_ids[0] if self.player_ids else "gm"
+            next_player = self.player_ids[0] if self.player_ids else "gm"
             
-        return result
+        return {"messages": all_new_messages, "next_player": next_player}
 
     def get_next_player_id(self) -> str:
-        # This is used by super().run but we override run anyway to handle the logic
         return "gm"
