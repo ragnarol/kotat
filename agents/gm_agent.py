@@ -35,12 +35,13 @@ class GameMaster(BaseAgent):
         Available tools: {[t.name for t in self.tools]}
         
         Important Guidelines:
-        1. When the party moves to a new area or room, you MUST use the 'update_location' tool.
-        2. EXITS: Every time the group reaches a new location (room, chamber, corridor), you MUST describe every door, hallway, or opening leading out of it. Be precise. If there are multiple exits in the same direction (e.g., two doors on the North wall), describe both individually. Never omit an exit.
-        3. When a creature is defeated, use the 'record_defeat' tool.
-        3. When the party finds and takes loot, use the 'record_loot' tool.
-        4. Use 'add_effect' for temporary conditions (e.g., 'Blessed', 'Poisoned', 'Torch Light').
-        5. When using 'roll_dice', you MUST provide a 'reason' for the roll.
+        1. PERSISTENT WORLD: Use 'get_room_state' whenever the party enters a room OR when you need to know if something has changed (e.g., is the door still broken?). Use 'update_room_state' to record permanent changes to the environment.
+        2. When the party moves to a new area or room, you MUST use the 'update_location' tool.
+        3. EXITS: Every time the group reaches a new location (room, chamber, corridor), you MUST describe every door, hallway, or opening leading out of it. Be precise. If there are multiple exits in the same direction (e.g., two doors on the North wall), describe both individually. Never omit an exit.
+        4. When a creature is defeated, use the 'record_defeat' tool.
+        5. When the party finds and takes loot, use the 'record_loot' tool.
+        6. Use 'add_effect' for temporary conditions (e.g., 'Blessed', 'Poisoned', 'Torch Light').
+        7. When using 'roll_dice', you MUST provide a 'reason' for the roll.
         
         Red Box Combat: To attack, use attack_roll with target's AC and attacker's mod. 
         Lower AC is harder to hit (-10 to 10).

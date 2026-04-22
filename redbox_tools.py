@@ -86,5 +86,16 @@ def create_redbox_tools(state_manager):
         """Refreshes all daily powers and spells for a character (e.g., after a long rest)."""
         return state_manager.refresh_powers(character_name)
 
+    @tool
+    def get_room_state(level: str, room: str):
+        """Retrieves the current state/modifications of a room. Use when entering a room or needing updated details."""
+        return state_manager.get_room_state(level, room)
+
+    @tool
+    def update_room_state(level: str, room: str, state_description: str):
+        """Updates the state of a room (e.g., 'Door is broken', 'Trap triggered', 'Room cleared')."""
+        return state_manager.update_room_state(level, room, state_description)
+
     return [pass_time, modify_hp, inspect_inventory, attack_roll, damage_roll, add_item, remove_item, 
-            update_location, record_defeat, record_loot, add_effect, use_power, refresh_powers]
+            update_location, record_defeat, record_loot, add_effect, use_power, refresh_powers,
+            get_room_state, update_room_state]

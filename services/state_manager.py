@@ -25,7 +25,7 @@ class CharacterSheet:
         return status
 
 class StateManager:
-    """Service to manage global game state like time, calendar, and character sheets."""
+    """Service to manage global game state like time, character sheets, and room states."""
     
     def __init__(self, start_hour: int = 8, start_minute: int = 0):
         self.total_minutes = start_hour * 60 + start_minute
@@ -34,6 +34,9 @@ class StateManager:
         # Location tracking
         self.current_level = "Unknown Level"
         self.current_room = "Entrance"
+        
+        # Room State tracking: keys are "level_id|room_id"
+        self.room_states: Dict[str, str] = {}
         
         # Kill and Loot logs
         self.defeated_creatures: List[Dict[str, str]] = []
@@ -95,6 +98,20 @@ class StateManager:
         chars = " | ".join([c.to_status_line() for c in self.characters.values()])
         return f"{loc} | {chars}"
 
+    def update_location(self, level: str, room: str):
+        self.current_level = level
+        self.current_room = room
+        return f"Location updated: {level}, {room}"
+
+    def get_room_state(self, level: str, room: str) -> str:
+        key = f"{level}|{room}"
+        return self.room_states.get(key, "Original state (no modifications).")
+
+    def update_room_state(self, level: str, room: str, state_description: str):
+        key = f"{level}|{room}"
+        self.room_states[key] = state_description
+        return f"Room state updated for {level}, {room}: {state_description}"
+
     def apply_hp_change(self, name: str, amount: int):
         if name in self.characters:
             char = self.characters[name]
@@ -115,11 +132,6 @@ class StateManager:
                 return f"Removed '{item}' from {character_name}'s inventory."
             return f"Item '{item}' not found in {character_name}'s inventory."
         return f"Character {character_name} not found."
-
-    def update_location(self, level: str, room: str):
-        self.current_level = level
-        self.current_room = room
-        return f"Location updated: {level}, {room}"
 
     def record_defeat(self, creature_name: str):
         entry = {
