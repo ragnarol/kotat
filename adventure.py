@@ -3,11 +3,23 @@ import json
 import base64
 import datetime
 import re
+import sqlite3
 from typing import Optional, List, Dict, Any
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, BaseMessage
 from langgraph.graph import StateGraph, START
-from langgraph.checkpoint.memory import MemorySaver
+
+# Try to import SqliteSaver from different possible locations
+try:
+    from langgraph.checkpoint.sqlite import SqliteSaver
+except ImportError:
+    try:
+        from langgraph.checkpoint import SqliteSaver
+    except ImportError:
+        # Fallback to MemorySaver if Sqlite is not available
+        print("WARNING: SqliteSaver not found. Persistence between restarts will not be available.")
+        print("To enable persistence, please install the sqlite extension: pip install langgraph-checkpoint-sqlite")
+        from langgraph.checkpoint.memory import MemorySaver as SqliteSaver
 
 from models.game_state import GameState
 from agents.gm_agent import GameMaster
@@ -20,11 +32,22 @@ class DNDAdventure:
     def __init__(self, data_path: str, llm_model: str = "gemini-3-flash-preview"):
         self.llm_gm = ChatGoogleGenerativeAI(model="gemini-3-pro-preview", temperature=0.7)
         self.llm = ChatGoogleGenerativeAI(model=llm_model, temperature=0.7)
-        self.memory = MemorySaver()
+        
+        # Persistence Setup
+        db_path = os.path.join("logs", "adventure_state.db")
+        os.makedirs("logs", exist_ok=True)
+        
+        # Determine if we are using real SQLite or just Memory fallback
+        if "MemorySaver" in str(SqliteSaver):
+            self.memory = SqliteSaver()
+        else:
+            conn = sqlite3.connect(db_path, check_same_thread=False)
+            self.memory = SqliteSaver(conn)
+        
         self.data_path = os.path.normpath(data_path)
         self.adventure_name = os.path.basename(self.data_path)
-        self.state_manager = StateManager()
         
+        # Load Adventure Context
         adventure_file = os.path.join(data_path, "adventure.json")
         with open(adventure_file, "r") as f:
             adventure_data = json.load(f)
@@ -38,7 +61,9 @@ class DNDAdventure:
                 with open(pdf_path, "rb") as pdf_file:
                     self.adventure_pdf_base64 = base64.b64encode(pdf_file.read()).decode('utf-8')
 
+        # Initialize Agents (Config only, state comes from Graph)
         self.players: List[Player] = []
+        self.player_names = []
         pcs_dir = os.path.join(data_path, "pcs")
         if os.path.exists(pcs_dir):
             for filename in os.listdir(pcs_dir):
@@ -46,28 +71,12 @@ class DNDAdventure:
                     with open(os.path.join(pcs_dir, filename), "r") as f:
                         pc_data = json.load(f)
                         name = pc_data["character_name"]
+                        self.player_names.append(name)
                         
-                        # Hydrate State Manager
-                        self.state_manager.add_character(
-                            name=name,
-                            max_hp=pc_data.get("hp", 10),
-                            ac=pc_data.get("ac", 9),
-                            attack_mod=pc_data.get("attack_mod", 0),
-                            damage_mod=pc_data.get("damage_mod", 0),
-                            save_target=pc_data.get("save", 15)
-                        )
-                        self.state_manager.characters[name].inventory = pc_data.get("inventory", [])
-                        
-                        # Load Powers/Spells
-                        powers = pc_data.get("powers", [])
-                        self.state_manager.characters[name].powers = list(powers)
-                        self.state_manager.characters[name].daily_powers = list(powers)
-
                         player = Player(
                             agent_id=name,
                             character_name=name,
                             llm=self.llm,
-                            state_manager=self.state_manager,
                             adventure_context=self.adventure_context,
                             physical_description=pc_data.get("physical_description") or pc_data.get("character_description"),
                             personality_description=pc_data.get("personality_description") or pc_data.get("player_description")
@@ -76,9 +85,8 @@ class DNDAdventure:
 
         self.gm = GameMaster(
             self.llm_gm, 
-            state_manager=self.state_manager,
             adventure_context=self.adventure_context, 
-            player_ids=[p.character_name for p in self.players],
+            player_ids=self.player_names,
             adventure_pdf_base64=self.adventure_pdf_base64
         )
         
@@ -91,13 +99,8 @@ class DNDAdventure:
         self.usage_log_path = os.path.join("logs", f"{date_str}-usage.log")
 
     def _log_usage(self, node_name: str, metadata: Dict[str, Any]):
-        """Logs LLM usage metadata (tokens, cache, etc.)."""
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        usage_info = {
-            "timestamp": timestamp,
-            "node": node_name,
-            "metadata": metadata
-        }
+        usage_info = {"timestamp": timestamp, "node": node_name, "metadata": metadata}
         with open(self.usage_log_path, "a") as f:
             f.write(json.dumps(usage_info) + "\n")
 
@@ -122,41 +125,100 @@ class DNDAdventure:
         workflow.add_conditional_edges("gm", lambda state: state["next_player"], mapping)
         return workflow.compile(checkpointer=self.memory, interrupt_before=["gm"])
 
-    def start(self, initial_state: GameState, thread_id: str = "game_1"):
-        """Starts the adventure loop."""
+    def create_initial_state(self) -> GameState:
+        """Hydrates the initial state from JSON files."""
+        state: GameState = {
+            "messages": [],
+            "next_player": "gm",
+            "total_minutes": 8 * 60, # 08:00 AM
+            "characters": {},
+            "current_level": "Unknown Level",
+            "current_room": "Entrance",
+            "room_states": {},
+            "defeated_creatures": [],
+            "taken_loot": [],
+            "dungeon_turn": 1
+        }
+        
+        manager = StateManager(state)
+        pcs_dir = os.path.join(self.data_path, "pcs")
+        if os.path.exists(pcs_dir):
+            for filename in os.listdir(pcs_dir):
+                if filename.endswith(".json"):
+                    with open(os.path.join(pcs_dir, filename), "r") as f:
+                        pc_data = json.load(f)
+                        name = pc_data["character_name"]
+                        manager.add_character(
+                            name=name,
+                            max_hp=pc_data.get("hp", 10),
+                            ac=pc_data.get("ac", 9),
+                            attack_mod=pc_data.get("attack_mod", 0),
+                            damage_mod=pc_data.get("damage_mod", 0),
+                            save_target=pc_data.get("save", 15)
+                        )
+                        state["characters"][name]["inventory"] = pc_data.get("inventory", [])
+                        powers = pc_data.get("powers", [])
+                        state["characters"][name]["powers"] = list(powers)
+                        state["characters"][name]["daily_powers"] = list(powers)
+        return state
+
+    def start(self, thread_id: str = "game_1"):
+        """Starts or resumes the adventure loop."""
         config = {"configurable": {"thread_id": thread_id}}
+        
+        # Check if we have an existing state
+        existing_state = self.app.get_state(config)
+        
+        if not existing_state.values:
+            # First time setup
+            print(f"--- INITIALIZING NEW ADVENTURE: {thread_id} ---")
+            initial_state = self.create_initial_state()
+            
+            # Construct party description for the initial prompt
+            party_desc = "\n".join([f"- {p.character_name}: {p.physical_description}" for p in self.players])
+            
+            start_msg = HumanMessage(content=f"""
+                The game begins! 
+                Adventure Context: {self.adventure_context}
+                Party: 
+                {party_desc}
+                GM, please describe the entrance and ask for actions.
+            """)
+            initial_state["messages"].append(start_msg)
+            self.app.invoke(initial_state, config)
+        else:
+            print(f"--- RESUMING ADVENTURE: {thread_id} ---")
+
         skip_count = 0
         gm_turn_count = 0
-        print("--- ADVENTURE START ---")
-        self.app.invoke(initial_state, config)
 
         try:
             while True:
-                state = self.app.get_state(config)
-                if "gm" in state.next:
+                state_obj = self.app.get_state(config)
+                # Helper manager to access status
+                manager = StateManager(state_obj.values)
+                
+                if "gm" in state_obj.next:
                     gm_turn_count += 1
-                    
                     if skip_count > 0:
                         skip_count -= 1
                         user_input = ""
                     else:
-                        print(f"\n{'-'*20}\n{self.state_manager.get_party_status()}\n{'-'*20}")
+                        print(f"\n{'-'*20}\n{manager.get_party_status()}\n{'-'*20}")
                         user_input = input("OVERRIDE (Enter=Continue, Num=Skip, 'exit'): ").strip()
                         if user_input.lower() == "exit": break
                         if user_input.isdigit():
                             skip_count = int(user_input) - 1
                             user_input = ""
                     
-                    # Periodic Party Status in Short Log
                     if gm_turn_count % 4 == 0:
-                        status_report = "[PARTY_STATUS] " + self.state_manager.get_party_status()
-                        self._log(status_report, is_short=True)
-                        for name, char in self.state_manager.characters.items():
-                            inv_report = f"[INVENTORY] {name}: {', '.join(char.inventory) if char.inventory else 'Empty'}"
-                            self._log(inv_report, is_short=True)
-                            if char.powers:
-                                pwr_report = f"[POWERS] {name}: {', '.join(char.powers)}"
-                                self._log(pwr_report, is_short=True)
+                        self._log("[PARTY_STATUS] " + manager.get_party_status(), is_short=True)
+                        for name, char in state_obj.values['characters'].items():
+                            inv = f"[INVENTORY] {name}: {', '.join(char['inventory']) or 'Empty'}"
+                            self._log(inv, is_short=True)
+                            if char['powers']:
+                                pwr = f"[POWERS] {name}: {', '.join(char['powers'])}"
+                                self._log(pwr, is_short=True)
 
                     if user_input:
                         self.app.update_state(config, {"messages": [HumanMessage(content=f"[System: {user_input}]")]})
@@ -166,13 +228,8 @@ class DNDAdventure:
                             if "messages" in update:
                                 from langchain_core.messages import ToolMessage, AIMessage
                                 for msg in update["messages"]:
-                                    # Log usage if metadata is present
                                     if isinstance(msg, AIMessage):
-                                        usage_data = {
-                                            "response_metadata": msg.response_metadata,
-                                            "usage_metadata": getattr(msg, "usage_metadata", None)
-                                        }
-                                        self._log_usage(node, usage_data)
+                                        self._log_usage(node, {"response_metadata": msg.response_metadata, "usage_metadata": getattr(msg, "usage_metadata", None)})
 
                                     text = "".join([b["text"] if isinstance(b, dict) else str(b) for b in (msg.content if isinstance(msg.content, list) else [msg.content])])
                                     log_entry = f"[{node.upper()}] {text}"
@@ -181,21 +238,16 @@ class DNDAdventure:
                                     self._log(log_entry)
                                     
                                     if not isinstance(msg, ToolMessage) and not (isinstance(msg, AIMessage) and msg.tool_calls and not text.strip()):
-                                        # Clean up [NEXT: ...] for the short log and console
                                         clean_text = re.sub(r"\[NEXT:\s*([^\]]+)\]", "", text).strip()
                                         if clean_text:
                                             output_line = f"[{node.upper()}] {clean_text}"
                                             print(f"\n{output_line}")
                                             self._log(output_line, is_short=True)
                                     elif isinstance(msg, AIMessage) and msg.tool_calls:
-                                        # If it's a tool call, log it in the short log
                                         for tc in msg.tool_calls:
-                                            tool_line = f"[{node.upper()}] (TOOL) {tc['name']}({tc['args']})"
-                                            self._log(tool_line, is_short=True)
+                                            self._log(f"[{node.upper()}] (TOOL) {tc['name']}({tc['args']})", is_short=True)
                                     elif isinstance(msg, ToolMessage):
-                                        # Log tool results in the short log too
-                                        result_line = f"[SYSTEM] {text}"
-                                        self._log(result_line, is_short=True)
+                                        self._log(f"[SYSTEM] {text}", is_short=True)
                 else:
                     self.app.invoke(None, config)
         except KeyboardInterrupt:

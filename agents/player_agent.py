@@ -1,20 +1,20 @@
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Dict
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from agents.base_agent import BaseAgent
+from models.game_state import GameState
+from services.state_manager import StateManager, CharacterHelper
 
 class Player(BaseAgent):
     """A player-controlled (or simulated) character agent."""
     
     def __init__(self, agent_id: str, character_name: str, llm: ChatGoogleGenerativeAI, 
-                 state_manager: Any,
                  next_player: str = "gm", 
                  physical_description: Optional[str] = None, 
                  personality_description: Optional[str] = None, 
                  adventure_context: Optional[str] = None):
         super().__init__(agent_id, llm)
         self.character_name = character_name
-        self.state_manager = state_manager
         self.next_player = next_player
         self.physical_description = physical_description or ""
         self.personality_description = personality_description or ""
@@ -29,18 +29,18 @@ class Player(BaseAgent):
                 formatted_history.append(msg)
         return formatted_history
 
-    def _get_system_message(self) -> SystemMessage:
-        char = self.state_manager.characters.get(self.character_name)
-        status_line = char.to_status_line() if char else "Status Unknown"
-        inventory = ", ".join(char.inventory) if char and char.inventory else "Empty"
+    def _get_system_message(self, state_manager: StateManager) -> SystemMessage:
+        char = state_manager.state['characters'].get(self.character_name)
+        status_line = CharacterHelper.to_status_line(char) if char else "Status Unknown"
+        inventory = ", ".join(char['inventory']) if char and char['inventory'] else "Empty"
 
         content = f"""You are {self.character_name}. Respond to the GM's description in character.
         
-        Current Time: {self.state_manager.get_time_string()}
+        Current Time: {state_manager.get_time_string()}
         Your Status: {status_line}
         Your Inventory: {inventory}
         
-        Full Party Status: {self.state_manager.get_party_status()}
+        Full Party Status: {state_manager.get_party_status()}
         
         IMPORTANT ROLEPLAY GUIDELINES:
         1. Describe your actions vividly, but DO NOT roll dice or calculate mechanics (like attack or damage rolls) yourself. The GM will handle all rolls and results.
@@ -58,6 +58,25 @@ class Player(BaseAgent):
 
     def _get_poke_message(self) -> HumanMessage:
         return HumanMessage(content=f"{self.character_name}, what do you do?")
+
+    def run(self, state: GameState) -> Dict[str, Any]:
+        """Executes the agent's turn logic."""
+        state_manager = StateManager(state)
+        history = self._preprocess_history(state["messages"])
+        
+        prompt = [
+            self._get_system_message(state_manager),
+            *history,
+            self._get_poke_message()
+        ]
+        
+        response = self.llm.invoke(prompt)
+        response.name = self.name
+        
+        return {
+            "messages": [response],
+            "next_player": self.get_next_player_id()
+        }
 
     def get_next_player_id(self) -> str:
         return self.next_player

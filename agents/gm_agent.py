@@ -5,12 +5,12 @@ from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage, To
 from agents.base_agent import BaseAgent
 from models.game_state import GameState
 from redbox_tools import roll_dice, create_redbox_tools
+from services.state_manager import StateManager
 
 class GameMaster(BaseAgent):
     """The Game Master agent responsible for world narration and action resolution."""
     
     def __init__(self, llm: ChatGoogleGenerativeAI, 
-                 state_manager: Any,
                  adventure_context: Optional[str] = None, 
                  player_ids: List[str] = None, 
                  adventure_pdf_base64: Optional[str] = None):
@@ -18,21 +18,16 @@ class GameMaster(BaseAgent):
         self.adventure_context = adventure_context or ""
         self.player_ids = player_ids or []
         self.adventure_pdf_base64 = adventure_pdf_base64
-        self.state_manager = state_manager
-        
-        # Create and bind tools
-        self.tools = [roll_dice] + create_redbox_tools(self.state_manager)
-        self.llm_with_tools = self.llm.bind_tools(self.tools)
 
-    def _get_system_message(self) -> SystemMessage:
+    def _get_system_message(self, state_manager: StateManager) -> SystemMessage:
         content = f"""You are the Game Master for a Red Box D&D game. 
         Your job is to describe the results of player actions and narrate the world. 
         Check for traps, rolls, or monster reactions as needed.
         
-        Current game time: {self.state_manager.get_time_string()}
-        Party Status: {self.state_manager.get_party_status()}
+        Current game time: {state_manager.get_time_string()}
+        Party Status: {state_manager.get_party_status()}
         
-        Available tools: {[t.name for t in self.tools]}
+        Available tools: roll_dice, pass_time, modify_hp, inspect_inventory, attack_roll, damage_roll, add_item, remove_item, update_location, record_defeat, record_loot, add_effect, use_power, refresh_powers, get_room_state, update_room_state
         
         Important Guidelines:
         1. PERSISTENT WORLD: Use 'get_room_state' whenever the party enters a room OR when you need to know if something has changed (e.g., is the door still broken?). Use 'update_room_state' to record permanent changes to the environment.
@@ -70,8 +65,12 @@ class GameMaster(BaseAgent):
         return HumanMessage(content="[GM: Resolve actions, describe the scene, nominate next player.]")
 
     def run(self, state: GameState) -> Dict[str, Any]:
+        state_manager = StateManager(state)
+        tools = [roll_dice] + create_redbox_tools(state_manager)
+        llm_with_tools = self.llm.bind_tools(tools)
+
         # Automatically advance time by 1 minute per turn
-        expiration_events = self.state_manager.advance_time(1)
+        expiration_events = state_manager.advance_time(1)
         
         history = self._preprocess_history(state["messages"])
         
@@ -80,11 +79,11 @@ class GameMaster(BaseAgent):
             event_note = "[System Note: " + " ".join(expiration_events) + "]"
             history.append(HumanMessage(content=event_note))
 
-        prompt = [self._get_system_message(), *history, self._get_poke_message()]
+        prompt = [self._get_system_message(state_manager), *history, self._get_poke_message()]
         
         all_new_messages = []
         while True:
-            response = self.llm_with_tools.invoke(prompt)
+            response = llm_with_tools.invoke(prompt)
             response.name = self.name
             all_new_messages.append(response)
             if not response.tool_calls:
@@ -92,7 +91,7 @@ class GameMaster(BaseAgent):
                 
             prompt.append(response)
             for tool_call in response.tool_calls:
-                tool_to_use = next((t for t in self.tools if t.name == tool_call["name"]), None)
+                tool_to_use = next((t for t in tools if t.name == tool_call["name"]), None)
                 if tool_to_use:
                     result = tool_to_use.invoke(tool_call["args"])
                     tool_msg = ToolMessage(content=str(result), tool_call_id=tool_call["id"])
