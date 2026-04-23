@@ -107,3 +107,7 @@ Every session generates a `YYYYMMDD-usage.log` containing detailed metadata abou
 ### Contribute
 
 Have fun, feel free to fork the repo, and please share your experiences or contribute to the code!
+
+## 📜 License
+
+This project is licensed under the **MIT License**. You are free to use, modify, and distribute the code as long as you provide attribution to the original project. See the [LICENSE](LICENSE) file for details.
