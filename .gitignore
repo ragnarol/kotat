@@ -1,6 +1,6 @@
 .env
 __pycache__/
 logs/
-stonehell/stonehell.pdf
+stonehell/
 *.py[cod]
 *$py.class
