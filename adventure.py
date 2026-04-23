@@ -4,8 +4,9 @@ import base64
 import datetime
 import re
 import sqlite3
+import traceback
 from typing import Optional, List, Dict, Any
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_google_genai import ChatGoogleGenerativeAI, create_context_cache
 from langchain_core.messages import HumanMessage, BaseMessage
 from langgraph.graph import StateGraph, START
 
@@ -90,6 +91,9 @@ class DNDAdventure:
             adventure_pdf_base64=self.adventure_pdf_base64
         )
         
+        # Setup Caching before compiling workflow
+        self._setup_context_caching()
+        
         self.app = self._compile_workflow()
 
         # Setup Logging
@@ -111,6 +115,48 @@ class DNDAdventure:
         if is_short:
             with open(self.short_log_path, "a") as f:
                 f.write(f"{message}\n")
+
+    def _setup_context_caching(self):
+        """Attempts to setup context caching for all agents."""
+        print("--- SETTING UP CONTEXT CACHING ---")
+        
+        # We need a dummy state manager to extract tools
+        initial_state = self.create_initial_state()
+        manager = StateManager(initial_state)
+        
+        agents = [self.gm] + self.players
+        
+        for agent in agents:
+            try:
+                static_messages = agent.get_static_messages()
+                tools = agent.get_tools(manager)
+                
+                # Minimum token count for caching is ~32k. 
+                # GM PDF will hit this, players might not initially.
+                # create_context_cache might raise an error if count is too low.
+                
+                print(f"Creating cache for {agent.name}...")
+                cache_name = create_context_cache(
+                    model=agent.llm,
+                    messages=static_messages,
+                    tools=tools,
+                    ttl="3600s"
+                )
+                
+                # Replace agent's LLM with a cached version
+                cached_llm = ChatGoogleGenerativeAI(
+                    model=agent.llm.model,
+                    temperature=agent.llm.temperature,
+                    cached_content=cache_name
+                )
+                agent.set_cached_llm(cached_llm)
+                print(f"SUCCESS: Cache created for {agent.name}: {cache_name}")
+                
+            except Exception as e:
+                # Standard failure if token count < 32k or other API issues
+                # We just log it and proceed with standard LLM calls
+                print(f"INFO: Caching skipped/failed for {agent.name}: {str(e)}")
+                # Uncomment for debugging: traceback.print_exc()
 
     def _compile_workflow(self):
         workflow = StateGraph(GameState)

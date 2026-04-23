@@ -29,18 +29,9 @@ class Player(BaseAgent):
                 formatted_history.append(msg)
         return formatted_history
 
-    def _get_system_message(self, state_manager: StateManager) -> SystemMessage:
-        char = state_manager.state['characters'].get(self.character_name)
-        status_line = CharacterHelper.to_status_line(char) if char else "Status Unknown"
-        inventory = ", ".join(char['inventory']) if char and char['inventory'] else "Empty"
-
+    def get_static_messages(self) -> List[BaseMessage]:
+        """Returns the static instructions and character description for caching."""
         content = f"""You are {self.character_name}. Respond to the GM's description in character.
-        
-        Current Time: {state_manager.get_time_string()}
-        Your Status: {status_line}
-        Your Inventory: {inventory}
-        
-        Full Party Status: {state_manager.get_party_status()}
         
         IMPORTANT ROLEPLAY GUIDELINES:
         1. Describe your actions vividly, but DO NOT roll dice or calculate mechanics (like attack or damage rolls) yourself. The GM will handle all rolls and results.
@@ -54,6 +45,19 @@ class Player(BaseAgent):
         if self.physical_description:
             content += f"\n\nPhysical Description:\n{self.physical_description}"
             
+        return [SystemMessage(content=content)]
+
+    def _get_system_message(self, state_manager: StateManager) -> SystemMessage:
+        """Returns the dynamic status of the character."""
+        char = state_manager.state['characters'].get(self.character_name)
+        status_line = CharacterHelper.to_status_line(char) if char else "Status Unknown"
+        inventory = ", ".join(char['inventory']) if char and char['inventory'] else "Empty"
+
+        content = f"""Current Time: {state_manager.get_time_string()}
+        Your Status: {status_line}
+        Your Inventory: {inventory}
+        Full Party Status: {state_manager.get_party_status()}"""
+            
         return SystemMessage(content=content)
 
     def _get_poke_message(self) -> HumanMessage:
@@ -64,8 +68,13 @@ class Player(BaseAgent):
         state_manager = StateManager(state)
         history = self._preprocess_history(state["messages"])
         
+        system_msg = self._get_system_message(state_manager)
+        
+        # If cached, we cannot use SystemMessage in the dynamic call
+        dynamic_context = [system_msg] if not self.is_cached else [HumanMessage(content=f"[STATUS UPDATE]\n{system_msg.content}")]
+
         prompt = [
-            self._get_system_message(state_manager),
+            *dynamic_context,
             *history,
             self._get_poke_message()
         ]

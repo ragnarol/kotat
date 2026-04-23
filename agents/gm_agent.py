@@ -19,15 +19,11 @@ class GameMaster(BaseAgent):
         self.player_ids = player_ids or []
         self.adventure_pdf_base64 = adventure_pdf_base64
 
-    def _get_system_message(self, state_manager: StateManager) -> SystemMessage:
+    def get_static_messages(self) -> List[BaseMessage]:
+        """Returns the static instructions and adventure PDF for caching."""
         content = f"""You are the Game Master for a Red Box D&D game. 
         Your job is to describe the results of player actions and narrate the world. 
         Check for traps, rolls, or monster reactions as needed.
-        
-        Current game time: {state_manager.get_time_string()}
-        Party Status: {state_manager.get_party_status()}
-        
-        Available tools: roll_dice, pass_time, modify_hp, inspect_inventory, attack_roll, damage_roll, add_item, remove_item, update_location, record_defeat, record_loot, add_effect, use_power, refresh_powers, get_room_state, update_room_state
         
         Important Guidelines:
         1. PERSISTENT WORLD: Use 'get_room_state' whenever the party enters a room OR when you need to know if something has changed (e.g., is the door still broken?). Use 'update_room_state' to record permanent changes to the environment.
@@ -47,10 +43,8 @@ class GameMaster(BaseAgent):
         if self.adventure_context:
             content += f"\n\nAdventure Context:\n{self.adventure_context}"
             
-        return SystemMessage(content=content)
-
-    def _preprocess_history(self, messages: List[BaseMessage]) -> List[BaseMessage]:
-        processed_messages = list(messages)
+        messages = [SystemMessage(content=content)]
+        
         if self.adventure_pdf_base64:
             pdf_context = HumanMessage(
                 content=[
@@ -58,16 +52,32 @@ class GameMaster(BaseAgent):
                     {"type": "media", "mime_type": "application/pdf", "data": self.adventure_pdf_base64}
                 ]
             )
-            processed_messages.insert(0, pdf_context)
-        return processed_messages
+            messages.append(pdf_context)
+            
+        return messages
+
+    def get_tools(self, state_manager: StateManager) -> List[Any]:
+        """Returns the set of tools the GM can use."""
+        return [roll_dice] + create_redbox_tools(state_manager)
+
+    def _get_system_message(self, state_manager: StateManager) -> SystemMessage:
+        """Returns the dynamic state information."""
+        content = f"""Current game time: {state_manager.get_time_string()}
+        Party Status: {state_manager.get_party_status()}"""
+        return SystemMessage(content=content)
+
+    def _preprocess_history(self, messages: List[BaseMessage]) -> List[BaseMessage]:
+        return list(messages)
 
     def _get_poke_message(self) -> HumanMessage:
         return HumanMessage(content="[GM: Resolve actions, describe the scene, nominate next player.]")
 
     def run(self, state: GameState) -> Dict[str, Any]:
         state_manager = StateManager(state)
-        tools = [roll_dice] + create_redbox_tools(state_manager)
-        llm_with_tools = self.llm.bind_tools(tools)
+        tools = self.get_tools(state_manager)
+        
+        # If cached, tools are already bound. Otherwise, bind them now.
+        llm_runnable = self.llm if self.is_cached else self.llm.bind_tools(tools)
 
         # Automatically advance time by 1 minute per turn
         expiration_events = state_manager.advance_time(1)
@@ -79,11 +89,16 @@ class GameMaster(BaseAgent):
             event_note = "[System Note: " + " ".join(expiration_events) + "]"
             history.append(HumanMessage(content=event_note))
 
-        prompt = [self._get_system_message(state_manager), *history, self._get_poke_message()]
+        system_msg = self._get_system_message(state_manager)
+        
+        # If cached, we cannot use SystemMessage in the dynamic call
+        dynamic_context = [system_msg] if not self.is_cached else [HumanMessage(content=f"[STATUS UPDATE]\n{system_msg.content}")]
+
+        prompt = [*dynamic_context, *history, self._get_poke_message()]
         
         all_new_messages = []
         while True:
-            response = llm_with_tools.invoke(prompt)
+            response = llm_runnable.invoke(prompt)
             response.name = self.name
             all_new_messages.append(response)
             if not response.tool_calls:

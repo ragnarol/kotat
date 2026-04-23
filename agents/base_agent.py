@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AIMessage
 from models.game_state import GameState
 
 class BaseAgent(ABC):
@@ -10,11 +10,26 @@ class BaseAgent(ABC):
     def __init__(self, name: str, llm: ChatGoogleGenerativeAI):
         self.name = name
         self.llm = llm
+        self.is_cached = False
 
     @abstractmethod
-    def _get_system_message(self) -> SystemMessage:
-        """Returns the system instructions for this agent."""
+    def _get_system_message(self, state_manager: Any) -> SystemMessage:
+        """Returns the dynamic system instructions for this agent (e.g. current status)."""
         pass
+
+    @abstractmethod
+    def get_static_messages(self) -> List[BaseMessage]:
+        """Returns the static messages to be used for context caching."""
+        return []
+
+    def get_tools(self, state_manager: Any) -> List[Any]:
+        """Returns tools for this agent. Overridden by GM."""
+        return []
+
+    def set_cached_llm(self, llm: ChatGoogleGenerativeAI):
+        """Sets the LLM instance that uses a context cache."""
+        self.llm = llm
+        self.is_cached = True
 
     @abstractmethod
     def _get_poke_message(self) -> HumanMessage:
@@ -32,18 +47,5 @@ class BaseAgent(ABC):
 
     def run(self, state: GameState) -> Dict[str, Any]:
         """Executes the agent's turn logic."""
-        history = self._preprocess_history(state["messages"])
-        
-        prompt = [
-            self._get_system_message(),
-            *history,
-            self._get_poke_message()
-        ]
-        
-        response = self.llm.invoke(prompt)
-        response.name = self.name
-        
-        return {
-            "messages": [response],
-            "next_player": self.get_next_player_id()
-        }
+        # This will be overridden in GM/Player to provide correct state_manager
+        raise NotImplementedError("Subclasses must implement run()")
