@@ -1,0 +1,12 @@
+{
+  "character_name": "Korg",
+  "player_name": "Player 1",
+  "physical_description": "A powerful human fighter with a heavy iron shield and a notched longsword. He's scarred from many battles.",
+  "personality_description": "Direct, tactical, and protective of his smaller companions. Speaks with a deep, gruff voice.",
+  "hp": 12,
+  "ac": 2,
+  "attack_mod": 1,
+  "damage_mod": 1,
+  "save": 14,
+  "inventory": ["Longsword", "Shield", "Chainmail", "Torch", "Rope"]
+}
