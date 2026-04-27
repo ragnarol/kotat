@@ -34,9 +34,13 @@ class DNDAdventure:
         self.llm_gm = ChatGoogleGenerativeAI(model="gemini-3-pro-preview", temperature=0.7)
         self.llm = ChatGoogleGenerativeAI(model=llm_model, temperature=0.7)
         
+        self.data_path = os.path.normpath(data_path)
+        self.adventure_name = os.path.basename(self.data_path)
+        self.log_dir = os.path.join("logs", self.adventure_name)
+        os.makedirs(self.log_dir, exist_ok=True)
+        
         # Persistence Setup
-        db_path = os.path.join("logs", "adventure_state.db")
-        os.makedirs("logs", exist_ok=True)
+        db_path = os.path.join(self.log_dir, "adventure_state.db")
         
         # Determine if we are using real SQLite or just Memory fallback
         if "MemorySaver" in str(SqliteSaver):
@@ -44,9 +48,6 @@ class DNDAdventure:
         else:
             conn = sqlite3.connect(db_path, check_same_thread=False)
             self.memory = SqliteSaver(conn)
-        
-        self.data_path = os.path.normpath(data_path)
-        self.adventure_name = os.path.basename(self.data_path)
         
         # Load Adventure Context
         adventure_file = os.path.join(data_path, "adventure.json")
@@ -98,9 +99,9 @@ class DNDAdventure:
 
         # Setup Logging
         date_str = datetime.datetime.now().strftime("%Y%m%d")
-        self.full_log_path = os.path.join("logs", f"{date_str}-{self.adventure_name}-full.log")
-        self.short_log_path = os.path.join("logs", f"{date_str}-{self.adventure_name}-short.log")
-        self.usage_log_path = os.path.join("logs", f"{date_str}-usage.log")
+        self.full_log_path = os.path.join(self.log_dir, f"{date_str}-{self.adventure_name}-full.log")
+        self.short_log_path = os.path.join(self.log_dir, f"{date_str}-{self.adventure_name}-short.log")
+        self.usage_log_path = os.path.join(self.log_dir, f"{date_str}-usage.log")
 
     def _log_usage(self, node_name: str, metadata: Dict[str, Any]):
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")

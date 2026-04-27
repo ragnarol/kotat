@@ -4,7 +4,7 @@ import glob
 
 def format_log():
     # Find the latest short log
-    logs = glob.glob("logs/*-short.log")
+    logs = glob.glob("logs/**/*-short.log", recursive=True)
     if not logs:
         print("No short logs found.")
         return
