@@ -21,7 +21,7 @@ def format_log():
     current_node = None
     
     # Regex to capture node name and content from short log
-    line_pattern = re.compile(r'^\[(\w+)\]\s*(.*)', re.DOTALL)
+    line_pattern = re.compile(r'^\[([^\]]+)\]\s*(.*)', re.DOTALL)
 
     for line in lines:
         match = line_pattern.match(line)
